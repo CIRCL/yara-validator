@@ -25,11 +25,13 @@ for rule in broken:
 print(===== REPAIRED RULES =====)
 for rule in repaired:
     print(u'{}'.format(rule.source))
+    
+validator.clear_tmp()
 ```
 Optional parameters for `YaraValidator.__init__()`:
  * `disk_buffering`: if set to True, allows the tool to use a temporary directory to copy sources and files before validation (requires write access to that directory). If set to False, nothing will be written to disk (requires a yara version supporting include_callback). If not set, will default to False if your yara version supports it, True otherwise.
- * `tmp_dir`: if `disk_buffering` is activated, forces the location where the temporary directory. Defaults to OS's temp.
- * `auto_clear`: if `disk_buffering` is activated, deletes the temporary directory once the `YaraValidator` object is destroyed.
+ * `tmp_dir`: if `disk_buffering` is activated, forces the location of the temporary directory. Defaults to OS's temp.
+ * `auto_clear`: if `disk_buffering` is activated, deletes the temporary directory once the `YaraValidator` object is destroyed. Defaults to False. Manual deletion can be done with clear_tmp().
 
 `check_all()` can take one optional boolean parameter. If set to `True`, the suggested repairs will be automatically accepted: the repaired sources will be used instead of the original ones if any other rules includes them. **Setting this parameter to True may lead to rules not behaving as expected.**.
 This function returns three lists: the valid rules, the broken rules and the repaired rules.
