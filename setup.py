@@ -7,8 +7,12 @@ setup(
     description = 'A simple library to check yara rules syntax',
     author = 'CIRCL - edhoedt',
     author_email = 'edhoedt@gmail.com',
+    license = 'GPLv3'
     url = 'https://github.com/CIRCL/yara-validator',
     download_url = 'https://github.com/CIRCL/yara-validator/archive/v0.1.tar.gz',
+    install_requires=[
+    	'yara-python',
+    ],
     keywords = ['yara'],
     classifiers = [],
 )
