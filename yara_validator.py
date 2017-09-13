@@ -122,7 +122,7 @@ class YaraValidator:
 
     def _incl_callback(self, requested_filename, filename, namespace):
         if (namespace, requested_filename) in self._all_rules:
-            return self._all_rules[namespace, requested_filename]
+            return self._all_rules[namespace, requested_filename].source
         else:
             return None
 
