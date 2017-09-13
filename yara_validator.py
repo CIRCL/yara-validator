@@ -173,43 +173,36 @@ class YaraValidator:
             yara_rule.error_data = str(e)
 
     def check_all(self, accept_repairs=False):
-        broken = {}
-        valid = {}
-        repaired = {}
+        broken = []
+        valid = []
+        repaired = []
         anything_validated = True
         while anything_validated:
             anything_validated = False
             still_not_valid = dict(self._unprocessed)
             for (namespace, include_name) in self._unprocessed:
                 with self._ch_namespace(namespace):
-                    if namespace not in valid:
-                        valid[namespace] = []
-                    if namespace not in broken:
-                        broken[namespace] = []
-                    if namespace not in repaired:
-                        repaired[namespace] = []
-
                     yara_rule = self._unprocessed[namespace, include_name]
                     self._validate(yara_rule)
                     if yara_rule.status == YaraRule.STATUS_VALID:
-                        valid[namespace].append(yara_rule)
+                        valid.append(yara_rule)
                         del still_not_valid[namespace, include_name]
                         anything_validated = True
                     else:
                         self._repair(yara_rule)
                         if yara_rule.status == YaraRule.STATUS_REPAIRED:
-                            repaired[namespace].append(yara_rule)
+                            repaired.append(yara_rule)
                             del still_not_valid[namespace, include_name]
-                            if accept_repairs:
+                            if accept_repairs: # FIXME no include_callback?
                                 self._all_rules[namespace, include_name] = \
                                     yara_rule.repaired_rule
                                 anything_validated = True
             self._unprocessed = still_not_valid
         for namespace, include_name in self._unprocessed:
-            broken[namespace].append(self._unprocessed[namespace, include_name])
+            broken.append(self._unprocessed[namespace, include_name])
         self._unprocessed = {}
         return valid, broken, repaired
-
+    
     @contextmanager
     def _ch_namespace(self, namespace):
         old_namespace = self._current_namespace
