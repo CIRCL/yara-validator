@@ -12,67 +12,107 @@ import re
 YARA_VERSION = 'v'+yara.__version__+' -- library: '+yara.__file__
 
 
-class YaraRule(object):
+class YaraSource:
 
-    STATUS_UNKNOWN = 0
-    STATUS_VALID = 1
-    STATUS_BROKEN = 2
-    STATUS_REPAIRED = 3
+    STATUS_UNKNOWN = 'UNKNOWN'
+    STATUS_VALID = 'VALID'
+    STATUS_BROKEN = 'BROKEN'
+    STATUS_REPAIRED = 'REPAIRED'
 
-    def __init__(self, data, namespace, include_name):
-        # TODO investigate behaviour when virtual_filename is in fact a path
-        if namespace is None:
-            namespace = 'default'
-        self.data = data
+    def __init__(self, **kwargs):
+        '''
+        :param source:
+        :param path:
+        :param namespace:
+        :param include_name:
+        :param buffer_dir:
+        :param force_disk_buffering:
+        '''
+        source = kwargs['source'] if 'source' in kwargs else None
+        path = kwargs['path'] if 'path' in kwargs else None
+        if (source and path) or (not source and not path):
+            raise SyntaxError('Expected either source or path (none or both '
+                              'were provided)')
+        if path is not None and not os.path.isabs(path):
+            raise TypeError('YaraSource expects an absolute path')
+        namespace = kwargs['namespace'] if 'namespace' in kwargs else 'default'
+        include_name = kwargs['include_name'] if 'include_name' in kwargs \
+            else None
+        buffer_dir = kwargs['buffer_dir'] if 'buffer_dir' in kwargs else None
+        force_disk_buffering = bool(kwargs['force_disk_buffering']) if \
+            'force_disk_buffering' in kwargs else False
+
+        self._source = source
+        self.path = path
+        self._buffer_path = None
         self.namespace = namespace
         self.include_name = include_name
+
         self.status = self.STATUS_UNKNOWN
         self.error_data = None
-        self.repaired_rule = None
+        self.repaired_source = None
+
+        if buffer_dir is not None: # FIXME check for duplicates
+            if force_disk_buffering \
+                    or self.include_name is not None:
+                if self.include_name is not None:
+                    write_fn = self.include_name
+                else:
+                    write_fn = hashlib.sha256(self.source.encode('utf-8'))\
+                                   .hexdigest()+'.yara'
+                write_dir = self.namespace if self.namespace is not None else ''
+                write_path = os.path.join(str(buffer_dir),
+                                          str(write_dir),
+                                          str(write_fn))
+                if self._is_file:
+                    shutil.copy(write_fn, write_path)
+                else:
+                    with open(os.path.abspath(write_path), 'w') as f:
+                        f.write(self.source)
+                self._buffer_path = os.path.abspath(write_path)
+
 
     @property
-    def compilable_rule(self):
+    def source(self):
+        if self._is_file:
+            with open(self.path, 'r') as f:
+                src = f.read()
+        else:
+            src = self._source
+        return src
+
+    @property
+    def _is_file(self):
+        return (self.path is not None)
+
+    @property
+    def _is_includable(self):
+        return (self.include_name is not None)
+
+    @property
+    def _yara_compilable_rule(self):
         return self.source.encode('utf-8') if six.PY2 else self.source
 
-class YaraSource(YaraRule):
-
-    def __init__(self, source, namespace=None, include_name=None):
-        if include_name is None:
-            include_name = hashlib.sha256(source.encode('utf-8')).hexdigest()\
-                           + '.yara'
-        YaraRule.__init__(self, source, namespace, include_name)
-
-    def to_file(self, folder):  # TODO needs safeguard
-        with open(os.path.join(folder, self.include_name), 'w') as f:
-            f.write(self.source)
-            path = os.path.realpath(f.name)
-        return YaraFile(path, self.namespace, self.include_name)
-
-    @property
-    def source(self):
-        return self.data
-
-
-class YaraFile(YaraRule):
-
-    def __init__(self, path, namespace=None, include_name=None):
-        if include_name is None:
-            include_name = os.path.basename(path)
-        YaraRule.__init__(self, path, namespace, include_name)
-        self.path = path
-
-    @property
-    def source(self):
-        with open(self.path, 'r') as f:
-            source = f.read()
-        return source
+    def __str__(self):
+        rep = u'//       STATUS: {}\n'.format(self.status)
+        if self.status == self.STATUS_BROKEN:
+            rep += u'//       Error: {}\n'.format(self.error_data)
+        elif self.status == self.STATUS_REPAIRED:
+            rep += u'//       ORIGINAL:\n'
+            rep += u'//       Error: {}\n'.format(self.error_data)
+            for line in self.source.splitlines():
+                rep += u'//\t\t\t{}\n'.format(line)
+        rep += u'//\n'+self.source
+        rep += u'\n'
+        return rep
 
 
 class YaraValidator:
 
     def __init__(self, **kwargs):
-        self._all_rules = {}
-        self._unprocessed = {}
+        self._named_rules = {}
+        self._anonymous_rules = []
+        self._unprocessed = []
         self._TMP_CREATED = False
         self._CLEAR_TMP = kwargs['auto_clear'] if 'auto_clear' in kwargs \
             else False
@@ -80,7 +120,6 @@ class YaraValidator:
             self._DISK_BUFFERING = True if kwargs['disk_buffering'] else False
         else:
             self._DISK_BUFFERING = not self.mem_only_supported()
-        self._current_namespace = 'default'
         if self._DISK_BUFFERING:
             tmp_dir = kwargs['tmp_dir'] if 'tmp_dir' in kwargs else None
             self._includes_tmp_dir = tempfile.mkdtemp(dir=tmp_dir)
@@ -93,36 +132,47 @@ class YaraValidator:
             self.clear_tmp()
 
     def clear_tmp(self):
-        self._all_rules = {}
+        self._named_rules = {}
+        self._anonymous_rules = []
         if self._TMP_CREATED:
             shutil.rmtree(self._includes_tmp_dir)
 
-    def _register_rule(self, rule):
-        if (rule.namespace, rule.include_name) not in self._all_rules:
-            self._all_rules[rule.namespace, rule.include_name] = rule
-            self._unprocessed[rule.namespace, rule.include_name] = rule
-        elif self._all_rules[rule.namespace,
-                             rule.include_name].source != rule.source:
-            raise Exception("Rules '{}' already registered in namespace '{}'"
-                            .format(rule.include_name, rule.namespace))
+    def _register_rule(self, rule): # FIXME check for duplicates
+        if rule._is_includable:
+            self._named_rules[rule.namespace, rule.include_name] = rule
+        else:
+            self._anonymous_rules.append(rule)
+        self._unprocessed.append(rule)
 
     def add_rule_source(self, source, namespace=None, include_name=None):
-        yara_rule = YaraSource(source, namespace, include_name)
-        with self._ch_namespace(yara_rule.namespace):
-            if self._DISK_BUFFERING:
-                yara_rule = yara_rule.to_file(os.getcwd())
+        if isinstance(source,YaraSource) \
+                and namespace is None \
+                and include_name is None:
+            self._register_rule(source)
+        else:
+            yara_rule = YaraSource(source=source,
+                                   namespace=namespace,
+                                   include_name=include_name,
+                                   buffer_dir=self._includes_tmp_dir,
+                                   force_disk_buffering=self._DISK_BUFFERING)
             self._register_rule(yara_rule)
 
     def add_rule_file(self, path, namespace=None, include_name=None):
-        yara_file = YaraFile(path, namespace, include_name)
-        with self._ch_namespace(yara_file.namespace):
-            if self._DISK_BUFFERING:
-                shutil.copy(yara_file.path, os.getcwd())
-            self._register_rule(yara_file)
+        if isinstance(path,YaraSource) \
+                and namespace is None \
+                and include_name is None:
+            self._register_rule(path)
+        else:
+            yara_rule = YaraSource(false=path,
+                                   namespace=namespace,
+                                   include_name=include_name,
+                                   buffer_dir=self._includes_tmp_dir,
+                                   force_disk_buffering=self._DISK_BUFFERING)
+            self._register_rule(yara_rule)
 
     def _incl_callback(self, requested_filename, filename, namespace):
-        if (namespace, requested_filename) in self._all_rules:
-            return self._all_rules[namespace, requested_filename].source
+        if (namespace, requested_filename) in self._named_rules:
+            return self._named_rules[namespace, requested_filename].source
         else:
             return None
 
@@ -139,19 +189,20 @@ class YaraValidator:
     def _validate(self, yara_rule):
         try:
             if self._DISK_BUFFERING:
-                if isinstance(yara_rule, YaraFile):
+                if yara_rule._is_file:
                     yara.compile(yara_rule.path)
-                elif isinstance(yara_rule, YaraSource):
-                    yara.compile(source=yara_rule.compilable_rule)
+                else:
+                    yara.compile(source=yara_rule._yara_compilable_rule)
             else:
                 retry_with_includes = False
                 try:
-                    yara.compile(source=yara_rule.compilable_rule,
+                    yara.compile(
+                        source=yara_rule._yara_compilable_rule,
                         includes=False)
                 except yara.SyntaxError as e:
                     if 'includes are disabled' in str(e):
                         if self.mem_only_supported():
-                            yara.compile(source=yara_rule.compilable_rule,
+                            yara.compile(source=yara_rule._yara_compilable_rule,
                                          include_callback=self._incl_callback)
                         else:
                             retry_with_includes = True
@@ -167,9 +218,9 @@ class YaraValidator:
                         "'disk_buffering' option (requires 'rw' access "
                         "to disk)."
                     )
-            yara_rule.status = YaraRule.STATUS_VALID
+            yara_rule.status = YaraSource.STATUS_VALID
         except yara.SyntaxError as e:
-            yara_rule.status = YaraRule.STATUS_BROKEN
+            yara_rule.status = YaraSource.STATUS_BROKEN
             yara_rule.error_data = str(e)
 
     def check_all(self, accept_repairs=False):
@@ -179,79 +230,81 @@ class YaraValidator:
         anything_validated = True
         while anything_validated:
             anything_validated = False
-            still_not_valid = dict(self._unprocessed)
-            for (namespace, include_name) in self._unprocessed:
-                with self._ch_namespace(namespace):
-                    yara_rule = self._unprocessed[namespace, include_name]
-                    self._validate(yara_rule)
-                    if yara_rule.status == YaraRule.STATUS_VALID:
-                        valid.append(yara_rule)
-                        del still_not_valid[namespace, include_name]
-                        anything_validated = True
+            still_not_valid = []
+            for yara_rule in self._unprocessed:
+                self._validate(yara_rule)
+                if yara_rule.status == YaraSource.STATUS_VALID:
+                    valid.append(yara_rule)
+                    anything_validated = True
+                else:
+                    self._repair(yara_rule)
+                    if yara_rule.status == YaraSource.STATUS_REPAIRED:
+                        repaired.append(yara_rule)
+                        if accept_repairs \
+                                and yara_rule.include_name is not None:
+                            # FIXME no include_callback?
+                            self._named_rules[yara_rule.namespace,
+                                              yara_rule.include_name] = \
+                                yara_rule.repaired_rule
+                            anything_validated = True
                     else:
-                        self._repair(yara_rule)
-                        if yara_rule.status == YaraRule.STATUS_REPAIRED:
-                            repaired.append(yara_rule)
-                            del still_not_valid[namespace, include_name]
-                            if accept_repairs: # FIXME no include_callback?
-                                self._all_rules[namespace, include_name] = \
-                                    yara_rule.repaired_rule
-                                anything_validated = True
+                        still_not_valid.append(yara_rule)
             self._unprocessed = still_not_valid
-        for namespace, include_name in self._unprocessed:
-            broken.append(self._unprocessed[namespace, include_name])
-        self._unprocessed = {}
+            broken.extend(self._unprocessed)
+        self._unprocessed = []
         return valid, broken, repaired
     
-    @contextmanager
-    def _ch_namespace(self, namespace):
-        old_namespace = self._current_namespace
-        self._current_namespace = namespace
-        if self._DISK_BUFFERING:
-            old_dir = os.getcwd()
-            if namespace and self._includes_tmp_dir:
-                working_dir = os.path.abspath(
-                    os.path.join(self._includes_tmp_dir, namespace)
-                )
-            elif self._includes_tmp_dir:
-                working_dir = os.path.abspath(self._includes_tmp_dir)
-            else:
-                working_dir = os.getcwd()
-            # prevents directory traversal, not enforced by yara itself
-            if os.path.commonprefix([working_dir, self._includes_tmp_dir]) \
-                    != self._includes_tmp_dir:
-                raise Exception('Directory traversal not allowed to {}'
-                                .format(working_dir))
-            if not os.path.exists(working_dir):
-                os.makedirs(working_dir)
-            os.chdir(working_dir)
-            yield
-            os.chdir(old_dir)
-        else:
-            yield
-        self._current_namespace = old_namespace
+    # @contextmanager
+    # def _ch_namespace(self, namespace):
+    #     old_namespace = self._current_namespace
+    #     self._current_namespace = namespace
+    #     if self._DISK_BUFFERING:
+    #         old_dir = os.getcwd()
+    #         if namespace and self._includes_tmp_dir:
+    #             working_dir = os.path.abspath(
+    #                 os.path.join(self._includes_tmp_dir, namespace)
+    #             )
+    #         elif self._includes_tmp_dir:
+    #             working_dir = os.path.abspath(self._includes_tmp_dir)
+    #         else:
+    #             working_dir = os.getcwd()
+    #         # prevents directory traversal, not enforced by yara itself
+    #         if os.path.commonprefix([working_dir, self._includes_tmp_dir]) \
+    #                 != self._includes_tmp_dir:
+    #             raise Exception('Directory traversal not allowed to {}'
+    #                             .format(working_dir))
+    #         if not os.path.exists(working_dir):
+    #             os.makedirs(working_dir)
+    #         os.chdir(working_dir)
+    #         yield
+    #         os.chdir(old_dir)
+    #     else:
+    #         yield
+    #     self._current_namespace = old_namespace
 
     def _repair(self, rule):
+        # FIXME if source fixed and rule is a file, copy new source to temp
         repaired_rule = rule
         prev_error = None
         max_tries = 5
         try_no = 0
         while try_no < max_tries \
-                and repaired_rule.status == YaraRule.STATUS_BROKEN\
+                and repaired_rule.status == YaraSource.STATUS_BROKEN\
                 and repaired_rule.error_data != prev_error:
             prev_error = repaired_rule.error_data
             try_no += 1
             decoded_source = repaired_rule.source
             suggested_src = self._suggest_repair(decoded_source,
                                                  repaired_rule.error_data)
-            repaired_rule = YaraSource(suggested_src,
-                                       repaired_rule.namespace,
-                                       repaired_rule.include_name)
+            repaired_rule = YaraSource(source=suggested_src,
+                                   namespace=rule.namespace,
+                                   include_name=rule.include_name,
+                                   buffer_dir=None)
             self._validate(repaired_rule)
         if repaired_rule != rule \
-                and repaired_rule.status == YaraRule.STATUS_VALID:
-            rule.status = YaraRule.STATUS_REPAIRED
-            rule.repaired_rule = repaired_rule
+                and repaired_rule.status == YaraSource.STATUS_VALID:
+            rule.status = YaraSource.STATUS_REPAIRED
+            rule.repaired_source = repaired_rule.source
 
     def _suggest_repair(self, rule_source, error_msg):
 
@@ -267,7 +320,6 @@ class YaraValidator:
             u'”': u'"',
             u'″': u'"',
             u'‶': u'"'
-
         }
         base_modules = {
             'pe': u'import "pe"',
