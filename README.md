@@ -4,7 +4,7 @@ Validates yara rules and tries to repair the broken ones.
 
 ## Requirements
   * Python 2.7+ or 3.3+
-  * yara and yara-python (PR [VirusTotal/yara-python#58](https://github.com/VirusTotal/yara-python/pull/58) and [VirusTotal/yara#727](https://github.com/VirusTotal/yara/pull/727) are recommended because they support include_callback)
+  * yara and yara-python (PR [VirusTotal/yara-python#58](https://github.com/VirusTotal/yara-python/pull/58) and [VirusTotal/yara#727](https://github.com/VirusTotal/yara/pull/727) are recommended because they support include_callback, allowing use without requiring disk write access)
 
 ## Usage
 ```python
