@@ -6,7 +6,6 @@ import os
 import hashlib
 import tempfile
 import shutil
-from contextlib import contextmanager
 import re
 
 YARA_VERSION = 'v'+yara.__version__+' -- library: '+yara.__file__
@@ -97,13 +96,15 @@ class YaraSource:
         rep = u'//       STATUS: {}\n'.format(self.status)
         if self.status == self.STATUS_BROKEN:
             rep += u'//       Error: {}\n'.format(self.error_data)
+            rep += u'//\n{}\n'.format(self.source)
         elif self.status == self.STATUS_REPAIRED:
             rep += u'//       ORIGINAL:\n'
             rep += u'//       Error: {}\n'.format(self.error_data)
             for line in self.source.splitlines():
                 rep += u'//\t\t\t{}\n'.format(line)
-        rep += u'//\n'+self.source
-        rep += u'\n'
+            rep += u'//\n{}\n'.format(self.repaired_source)
+        else:
+            rep += u'//\n{}\n'.format(self.source)
         return rep
 
 
@@ -253,34 +254,7 @@ class YaraValidator:
             broken.extend(self._unprocessed)
         self._unprocessed = []
         return valid, broken, repaired
-    
-    # @contextmanager
-    # def _ch_namespace(self, namespace):
-    #     old_namespace = self._current_namespace
-    #     self._current_namespace = namespace
-    #     if self._DISK_BUFFERING:
-    #         old_dir = os.getcwd()
-    #         if namespace and self._includes_tmp_dir:
-    #             working_dir = os.path.abspath(
-    #                 os.path.join(self._includes_tmp_dir, namespace)
-    #             )
-    #         elif self._includes_tmp_dir:
-    #             working_dir = os.path.abspath(self._includes_tmp_dir)
-    #         else:
-    #             working_dir = os.getcwd()
-    #         # prevents directory traversal, not enforced by yara itself
-    #         if os.path.commonprefix([working_dir, self._includes_tmp_dir]) \
-    #                 != self._includes_tmp_dir:
-    #             raise Exception('Directory traversal not allowed to {}'
-    #                             .format(working_dir))
-    #         if not os.path.exists(working_dir):
-    #             os.makedirs(working_dir)
-    #         os.chdir(working_dir)
-    #         yield
-    #         os.chdir(old_dir)
-    #     else:
-    #         yield
-    #     self._current_namespace = old_namespace
+
 
     def _repair(self, rule):
         # FIXME if source fixed and rule is a file, copy new source to temp
