@@ -1,4 +1,4 @@
-from distutils.core import setup
+from setuptools import setup, find_packages
 
 setup(
     name = 'yara_validator',
@@ -7,6 +7,7 @@ setup(
     author = 'CIRCL - edhoedt',
     author_email = 'edhoedt@gmail.com',
     license = 'GPLv3',
+    packages=find_packages(),
     url = 'https://github.com/CIRCL/yara-validator',
     download_url = 'https://github.com/CIRCL/yara-validator/archive/v0.1.tar.gz',
     install_requires=[
