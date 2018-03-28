@@ -54,4 +54,4 @@ Rules in the list are instances of `YaraRule` with the following properties:
  * `include_name`: name usable in Yara `include` directives
  * `status`: `YaraRule.STATUS_UNKNOWN`, `YaraRule.STATUS_VALID`, `YaraRule.STATUS_BROKEN` or `YaraRule.STATUS_REPAIRED`
  * `error_data`: if `STATUS_BROKEN` or `STATUS_REPAIRED`, contains the error message
- * `repaired_rule`: if `STATUS_REPAIRED`, contains a YaraRule with the repaired `source` and `STATUS_VALID`
+ * `repaired_source`: if `STATUS_REPAIRED`, contains a YaraRule with the repaired `source` and `STATUS_VALID`
