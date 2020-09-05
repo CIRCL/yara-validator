@@ -164,7 +164,7 @@ class YaraValidator:
                 and include_name is None:
             self._register_rule(path)
         else:
-            yara_rule = YaraSource(false=path,
+            yara_rule = YaraSource(path=path,
                                    namespace=namespace,
                                    include_name=include_name,
                                    buffer_dir=self._includes_tmp_dir,
